@@ -23,13 +23,31 @@
 
 	aliases {
 		serial0 = &wkup_uart0;
-		serial2 = &main_uart0;
+		serial2 = &main_uart1;
 		mmc1 = &sdhci1;
 		rtc0 = &rtc;
 	};
 
 	chosen {
-		stdout-path = &main_uart0;
+		stdout-path = &main_uart1;
+	};
+
+	codec_audio: sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "DMIC-IN";
+		simple-audio-card,format = "dsp_b";
+		simple-audio-card,bitclock-master = <&clock_master>;
+		simple-audio-card,frame-master = <&clock_master>;
+		clock_master: simple-audio-card,cpu {
+			sound-dai = <&mcasp0>;
+			dai-tdm-slot-num = <4>;
+			dai-tdm-slot-width = <16>;
+			system-clock-direction-out;
+		};
+
+		sound_codec: simple-audio-card,codec {
+			sound-dai = <&tlv320adc3140>;
+		};
 	};
 
 	memory@80000000 {
@@ -215,11 +233,43 @@
 	};
 };
 
+&mcasp0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_mcasp0>;
+	op-mode = <0>; /* I2S mode */
+	serial-dir = <  /* 0: INACTIVE, 1: TX, 2: RX */
+	       2 0 0 0
+	       0 0 0 0
+	       0 0 0 0
+	       0 0 0 0
+	>;
+	tdm-slots = <4>;
+	#sound-dai-cells = <0>;
+	status = "okay";
+};
+
 &main_pmx0 {
+	pinctrl_mcasp0: main-mcasp0-default-pins {
+		pinctrl-single,pins = <
+			J722S_IOPAD(0x1A4, PIN_OUTPUT, 0) /* (D25) MCASP0_ACLKX */
+			J722S_IOPAD(0x1A8, PIN_OUTPUT, 0) /* (C26) MCASP0_AFSX */
+			J722S_IOPAD(0x1A0, PIN_INPUT, 0) /* (F23) MCASP0_AXR0 */
+			J722S_IOPAD(0x19C, PIN_INPUT, 0) /* (B25) MCASP0_AXR1 */
+		>;
+	};
+
 	main_i2c0_pins_default: main-i2c0-default-pins {
 		pinctrl-single,pins = <
 			J722S_IOPAD(0x01e0, PIN_INPUT_PULLUP, 0) /* (D23) I2C0_SCL */
 			J722S_IOPAD(0x01e4, PIN_INPUT_PULLUP, 0) /* (B22) I2C0_SDA */
+		>;
+		bootph-all;
+	};
+	
+  main_uart1_pins_default: main-uart1-default-pins {
+		pinctrl-single,pins = <
+			J722S_IOPAD(0x1B0, PIN_OUTPUT, 2) /* (F24) MCASP0_ACLKR.UART1_TXD */
+			J722S_IOPAD(0x1AC, PIN_INPUT, 2) /* (C27) MCASP0_AFSR.UART1_RXD */
 		>;
 		bootph-all;
 	};
@@ -340,6 +390,14 @@
 	status = "okay";
 };
 
+&main_uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&main_uart1_pins_default>;
+	bootph-all;
+	status = "okay";
+};
+
+
 &mcu_pmx0 {
 	wkup_uart0_pins_default: wkup-uart0-default-pins {
 		pinctrl-single,pins = <
@@ -383,6 +441,13 @@
 	clock-frequency = <100000>;
 	bootph-all;
 	status = "okay";
+	
+  tlv320adc3140: audio-codec@4c {
+		#sound-dai-cells = <0>;
+		compatible = "ti,tlv320adc3140";
+		reg = <0x4c>;
+    		ti,mic-bias-source = <0>;
+	};
 
 	tps65219: pmic@30 {
 		compatible = "ti,tps65219";
