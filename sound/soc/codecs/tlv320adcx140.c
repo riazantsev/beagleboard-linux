@@ -20,6 +20,9 @@
 #include <sound/initval.h>
 #include <sound/tlv.h>
 
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+
 #include "tlv320adcx140.h"
 
 struct adcx140_priv {
@@ -141,6 +144,7 @@ static bool adcx140_volatile(struct device *dev, unsigned int reg)
 	case ADCX140_DEV_STS0:
 	case ADCX140_DEV_STS1:
 	case ADCX140_ASI_STS:
+	case ADCX140_ASI_OUT_CH_EN:
 		return true;
 	default:
 		return false;
@@ -618,7 +622,6 @@ static int adcx140_phase_calib_get(struct snd_kcontrol *kcontrol,
 
 	value->value.integer.value[0] = adcx140->phase_calib_on ? 1 : 0;
 
-
 	return 0;
 }
 
@@ -716,7 +719,6 @@ static void adcx140_pwr_ctrl(struct adcx140_priv *adcx140, bool power_state)
 			dev_err(component->dev, "%s: register write error %d\n",
 				__func__, ret);
 	}
-
 	regmap_update_bits(adcx140->regmap, ADCX140_PWR_CFG,
 			   ADCX140_PWR_CTRL_MSK, pwr_ctrl);
 }
@@ -967,6 +969,9 @@ static int adcx140_codec_probe(struct snd_soc_component *component)
 	int i;
 	int ret;
 	bool tx_high_z;
+	int slots_count = 0;
+	u32 tdm_slots[ADCX140_TDM_SLOTS_MAX];
+	u32 slots_mask_val = 0;
 
 	ret = device_property_read_u32(adcx140->dev, "ti,mic-bias-source",
 				      &bias_source);
@@ -1019,6 +1024,24 @@ static int adcx140_codec_probe(struct snd_soc_component *component)
 
 		ret = regmap_write(adcx140->regmap, ADCX140_PDM_CFG,
 				   pdm_edge_val);
+		if (ret)
+			return ret;
+	}
+
+	slots_count = device_property_count_u32(adcx140->dev,
+					      "ti,tdm-slots-enabled");
+	if (slots_count && slots_count <= ADCX140_TDM_SLOTS_MAX) {
+		ret = device_property_read_u32_array(adcx140->dev,
+						     "ti,tdm-slots-enabled",
+						     tdm_slots, slots_count);
+		if (ret)
+			return ret;
+
+		for (i = 0; i < slots_count; i++)
+			slots_mask_val |= (1 << (ADCX140_TDM_SLOTS_MAX - 1 - tdm_slots[i]));
+
+		ret = regmap_write(adcx140->regmap, ADCX140_ASI_OUT_CH_EN,
+				  slots_mask_val);
 		if (ret)
 			return ret;
 	}
@@ -1143,6 +1166,70 @@ static void adcx140_disable_regulator(void *arg)
 	regulator_disable(adcx140->supply_areg);
 }
 
+static int adcx140_status_read(struct seq_file *m, void *v) {
+	// A pointer to your driver's private data
+	struct adcx140_priv *adcx140 = m->private;
+	// Dump some status information
+	for (unsigned i = 0; i < ARRAY_SIZE(adcx140_reg_defaults); i++) {
+			unsigned int reg_val;
+			int ret = regmap_read(adcx140->regmap, adcx140_reg_defaults[i].reg,
+														&reg_val);
+			if (ret) {
+					seq_printf(m, "Failed to read register 0x%02x: %d\n", i, ret);
+					continue;
+			}
+			seq_printf(m, "Reg 0x%02x: 0x%08x\n", adcx140_reg_defaults[i].reg,
+					reg_val);
+	}
+	return 0;
+}
+
+static int adcx140_status_proc_open(struct inode *inode, struct file *file) {
+	// Get a pointer to your driver's data from the inode
+	struct adcx140_priv *data = pde_data(inode);
+	return single_open(file, adcx140_status_read, data);
+}
+
+static const struct proc_ops adcx140_status_proc_ops = {
+	.proc_open = adcx140_status_proc_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+};
+
+
+static ssize_t adcx140_reg_update_proc_read(struct file *file,
+					    char __user *buffer,
+					    size_t length, loff_t *offset)
+{
+	return 0;
+}
+
+static ssize_t adcx140_reg_update_proc_write(struct file *file,
+					     const char __user *buffer,
+					     size_t count, loff_t *offset)
+{
+	struct adcx140_priv *data = pde_data(file_inode(file));
+	char buf[32] = {};
+	if (copy_from_user(buf, buffer, count))
+		return 0;
+	char* space = strchr(buf, ' ');
+	*space = '\0';
+	long addr, val;
+	if (kstrtol(buf, 16, &addr))
+		return 0;
+	if (kstrtol(space + 1, 16, &val))
+		return 0;
+	dev_info(data->dev, "Writing 0x%02lx to 0x%02lx\n", val, addr);
+	regmap_write(data->regmap, addr, val);
+	return count;
+}
+
+static const struct proc_ops adcx140_mod_proc_ops = {
+	.proc_read = adcx140_reg_update_proc_read ,
+	.proc_write = adcx140_reg_update_proc_write,
+};
+
 static int adcx140_i2c_probe(struct i2c_client *i2c)
 {
 	struct adcx140_priv *adcx140;
@@ -1173,8 +1260,8 @@ static int adcx140_i2c_probe(struct i2c_client *i2c)
 			dev_err(adcx140->dev, "Failed to enable areg\n");
 			return ret;
 		}
-
-		ret = devm_add_action_or_reset(&i2c->dev, adcx140_disable_regulator, adcx140);
+		ret = devm_add_action_or_reset(&i2c->dev,
+		    			adcx140_disable_regulator, adcx140);
 		if (ret)
 			return ret;
 	}
@@ -1188,6 +1275,18 @@ static int adcx140_i2c_probe(struct i2c_client *i2c)
 	}
 
 	i2c_set_clientdata(i2c, adcx140);
+
+	struct proc_dir_entry *proc_dir;
+
+	// Create the proc entry
+	proc_dir = proc_mkdir("adcx140_debug", NULL);
+	if (proc_dir) {
+		proc_create_data("status", 0, proc_dir,
+				 &adcx140_status_proc_ops,
+				 adcx140);
+		proc_create_data("update", 0, proc_dir, &adcx140_mod_proc_ops,
+				 adcx140);
+}
 
 	return devm_snd_soc_register_component(&i2c->dev,
 					       &soc_codec_driver_adcx140,

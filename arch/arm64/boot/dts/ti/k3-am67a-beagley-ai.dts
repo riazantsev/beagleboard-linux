@@ -441,12 +441,13 @@
 	clock-frequency = <100000>;
 	bootph-all;
 	status = "okay";
-	
+
   tlv320adc3140: audio-codec@4c {
 		#sound-dai-cells = <0>;
 		compatible = "ti,tlv320adc3140";
 		reg = <0x4c>;
-    		ti,mic-bias-source = <0>;
+		ti,mic-bias-source = <0>;
+		ti,tdm-slots-enabled = <0 1 2 3>;
 	};
 
 	tps65219: pmic@30 {
