@@ -1371,7 +1371,7 @@ static const unsigned int davinci_mcasp_dai_rates[] = {
 	88200, 96000, 176400, 192000,
 };
 
-#define DAVINCI_MAX_RATE_ERROR_PPM 1000
+#define DAVINCI_MAX_RATE_ERROR_PPM 20000
 
 static int davinci_mcasp_hw_rule_rate(struct snd_pcm_hw_params *params,
 				      struct snd_pcm_hw_rule *rule)
